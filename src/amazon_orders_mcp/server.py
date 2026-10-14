@@ -15,9 +15,13 @@ import logging
 from datetime import date, timedelta
 from typing import Any, Callable, Dict, List, Optional, cast
 
+import truststore
+
+truststore.inject_into_ssl()  # use the Windows certificate store (corporate/AV proxies)
+
 from amazonorders.exception import AmazonOrdersAuthError
 from dotenv import load_dotenv
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from amazon_orders_mcp.client import (
@@ -54,7 +58,7 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
-mcp = FastMCP("Amazon Orders MCP Server")
+mcp = MCPServer("Amazon Orders MCP Server")
 
 # Wall-clock timeouts per tool (seconds). These are an upper bound — actual
 # requests are also capped at DEFAULT_HTTP_TIMEOUT (see client.py). These
