@@ -75,7 +75,7 @@ class NonInteractiveIO(IODefault):
     def prompt(self, message: str, type: Optional[type] = None, **kwargs: Any) -> Any:
         raise NonInteractiveAuthRequired(
             f"Amazon requires interactive input ({message!r}). "
-            "Cookies may be expired — run `uv run python cookie_capture.py` "
+            "Cookies may be expired — call the refresh_session tool to sign in "
             "to capture a fresh session."
         )
 

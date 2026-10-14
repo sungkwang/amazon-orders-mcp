@@ -238,7 +238,7 @@ class TestRunBlocking:
 
         result = asyncio.run(_run_blocking(blocking, timeout=1.0, tool_name="t"))
         payload = json.loads(result)
-        assert payload["action_required"] == "run_cookie_capture"
+        assert payload["action_required"] == "refresh_session"
         assert "need captcha" in payload["error"]
 
     def test_amazon_auth_error(self):
@@ -250,8 +250,8 @@ class TestRunBlocking:
 
         result = asyncio.run(_run_blocking(blocking, timeout=1.0, tool_name="t"))
         payload = json.loads(result)
-        assert payload["action_required"] == "run_cookie_capture"
-        assert "cookie_capture.py" in payload["error"]
+        assert payload["action_required"] == "refresh_session"
+        assert "refresh_session" in payload["error"]
         assert payload["exception_type"] == "AmazonOrdersAuthError"
         assert payload["underlying_error"] == "session expired"
 

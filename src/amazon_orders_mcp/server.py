@@ -30,6 +30,7 @@ from amazon_orders_mcp.client import (
     ensure_authenticated,
 )
 from amazon_orders_mcp.secure_session import cookie_jar_exists, load_credentials
+from amazon_orders_mcp.session_capture import capture_session
 from amazon_orders_mcp.serialize import (
     serialize_order,
     serialize_orders,
@@ -108,16 +109,19 @@ async def _run_blocking(
             timeout_seconds=timeout,
         )
     except NonInteractiveAuthRequired as e:
-        return _error(str(e), action_required="run_cookie_capture")
+        return _error(
+            f"{e} Call the refresh_session tool, sign in, then retry.",
+            action_required="refresh_session",
+        )
     except AmazonOrdersAuthError as e:
         # This covers both AmazonOrdersAuthError (WAF challenge / bad session)
         # and its subclass AmazonOrdersAuthRedirectError (Amazon redirected
         # us to the sign-in page). In either case, the cookies are stale.
         logger.warning(f"{tool_name} hit auth error: {e}")
         return _error(
-            "Amazon session has expired. Re-run `uv run python cookie_capture.py` "
-            "in the amazon-orders-mcp repo to capture fresh cookies, then retry.",
-            action_required="run_cookie_capture",
+            "Amazon session has expired. Call the refresh_session tool, sign in "
+            "in the browser window, then retry.",
+            action_required="refresh_session",
             underlying_error=str(e),
             exception_type=type(e).__name__,
             tool=tool_name,
@@ -141,8 +145,7 @@ Amazon blocks the Python `requests` library's sign-in flow with a JavaScript
 WAF challenge, so this server authenticates by capturing cookies from a real
 Chromium browser session instead.
 
-1️⃣  Open Terminal in the server directory and run:
-    uv run python cookie_capture.py
+1️⃣  Call the `refresh_session` tool (a browser window opens).
 
 2️⃣  A Chromium window will open to the Amazon sign-in page.
     Enter your email, password, and any 2FA code as usual.
@@ -158,7 +161,7 @@ Chromium browser session instead.
 
 ✅ Cookies persist until Amazon expires them (typically weeks)
 ✅ No credentials are stored — cookie jar only
-🔁 When cookies expire, just re-run cookie_capture.py"""
+🔁 When cookies expire, call the refresh_session tool"""
 
 
 @mcp.tool()
@@ -182,7 +185,7 @@ def check_auth_status() -> str:
     else:
         status_lines.append("❌ No cookie jar found")
         status_lines.append(
-            "   Run `uv run python cookie_capture.py` to capture a session."
+            "   Call the `refresh_session` tool to sign in and save a session."
         )
 
     if has_creds:
@@ -191,6 +194,35 @@ def check_auth_status() -> str:
         )
 
     return "\n".join(status_lines)
+
+
+REFRESH_TIMEOUT_DEFAULT = 180
+REFRESH_TIMEOUT_MIN = 60
+REFRESH_TIMEOUT_MAX = 300
+
+
+def _clamp_refresh_timeout(seconds: int) -> int:
+    return max(REFRESH_TIMEOUT_MIN, min(REFRESH_TIMEOUT_MAX, int(seconds)))
+
+
+def _blocking_refresh_session(timeout_seconds: int) -> str:
+    return _json(capture_session(timeout_seconds=timeout_seconds))
+
+
+@mcp.tool()
+async def refresh_session(timeout_seconds: int = REFRESH_TIMEOUT_DEFAULT) -> str:
+    """Open a browser window for Amazon sign-in and save fresh cookies.
+
+    Sign in in the window, including any 2-factor step. The tool returns once
+    sign-in completes, or after the timeout (60-300 seconds).
+    """
+    seconds = _clamp_refresh_timeout(timeout_seconds)
+    return await _run_blocking(
+        _blocking_refresh_session,
+        seconds,
+        timeout=seconds + 60,
+        tool_name="refresh_session",
+    )
 
 
 # ---------------------------------------------------------------------------

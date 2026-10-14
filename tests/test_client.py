@@ -13,7 +13,7 @@ class TestNonInteractiveIO:
         # Error message should mention the prompt and how to recover
         msg = str(exc_info.value)
         assert "Enter CAPTCHA" in msg
-        assert "cookie_capture.py" in msg
+        assert "refresh_session" in msg
 
     def test_echo_does_not_raise(self):
         # echo should log, not raise — otherwise any informational message
