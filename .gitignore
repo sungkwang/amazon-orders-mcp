@@ -44,3 +44,4 @@ cookies.json
 # Session/token storage
 .amazon-orders-mcp/
 node_modules/
+.agent/
