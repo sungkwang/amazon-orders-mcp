@@ -180,3 +180,14 @@ MIT. See [LICENSE](LICENSE).
   the library that does all the real work.
 - [`monarch-mcp-server`](https://github.com/robcerda/monarch-mcp-server) by
   Rob Cerda — template for the MCP scaffolding and keyring pattern.
+
+## List one year of orders (script)
+`tools/list-orders/list-orders-by-year.mjs` lists a year of Amazon orders with the session saved by `cookie_capture.py`. It is read-only.
+
+```
+cd tools/list-orders
+npm install
+node list-orders-by-year.mjs 2026 orders_2026.json
+```
+
+The output is a JSON list with order number, date, total, and the raw order text. Amazon may throttle or challenge frequent requests, so run it occasionally.
