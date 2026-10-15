@@ -1,4 +1,4 @@
-"""Invoice PDF naming, overwrite refusal, and input checks. Fake browser; no Amazon contact."""
+"""Invoice PDF naming, overwrite refusal, batch saving, and input checks. Fake browser; no Amazon contact."""
 
 import json
 from pathlib import Path
@@ -6,9 +6,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from amazon_orders_mcp.invoice import invoice_filename, save_order_invoice_pdf
+from amazon_orders_mcp.client import NonInteractiveAuthRequired
+from amazon_orders_mcp.invoice import invoice_filename, save_order_invoice_pdf, save_order_invoices
 
 ORDER = "111-0000000-0000001"
+OTHER = "111-0000000-0000002"
 
 
 def test_file_name_uses_iso_date_and_order_id():
@@ -24,24 +26,37 @@ def test_bad_order_id_or_date_is_rejected():
 
 
 class FakePage:
-    def __init__(self, text, url_after=None, record=None):
-        self._text = text
-        self._url_after = url_after
-        self.url = ""
+    """Serves summary text per order number; a page that redirects to sign-in when asked."""
+
+    def __init__(self, texts, expired=(), record=None):
+        self._texts = texts
+        self._expired = set(expired)
+        self._url = ""
         self.record = record if record is not None else {}
 
+    @property
+    def url(self):
+        return "https://www.amazon.com/ap/signin" if self._current() in self._expired else self._url
+
+    def _current(self):
+        return self._url.rsplit("=", 1)[-1]
+
     def goto(self, url, **kwargs):
-        self.url = self._url_after or url
+        self._url = url
 
     def wait_for_timeout(self, ms):
         pass
 
     def evaluate(self, script):
-        return self._text
+        return self._texts.get(self._current(), "")
 
     def pdf(self, path, **kwargs):
-        self.record["pdf_path"] = path
+        self.record.setdefault("pdfs", []).append(path)
         Path(path).write_bytes(b"%PDF-fake")
+
+
+def _summary(order_id, date="January 1, 2026"):
+    return f"Order Summary\nOrder placed {date}  Order # {order_id}\nGrand Total:\n$1.00\n"
 
 
 def _factory(page, record):
@@ -71,35 +86,83 @@ def jar(tmp_path):
     return path
 
 
-SUMMARY = "Order Summary\nOrder placed January 1, 2026  Order # 111-0000000-0000001\nGrand Total:\n$1.00\n"
+@pytest.fixture
+def out_dir(tmp_path):
+    path = tmp_path / "2026"
+    path.mkdir()
+    return path
 
 
-def test_saves_pdf_with_standard_name(tmp_path, jar):
+def test_saves_pdf_with_standard_name(out_dir, jar):
     record = {}
-    page = FakePage(SUMMARY, record=record)
-    out_dir = tmp_path / "2026"
-    out_dir.mkdir()
+    page = FakePage({ORDER: _summary(ORDER)}, record=record)
     target = save_order_invoice_pdf(ORDER, out_dir, jar_path=jar, playwright_factory=_factory(page, record))
     assert target.name == f"2026-01-01_{ORDER}_Invoice.pdf"
     assert target.read_bytes().startswith(b"%PDF")
     assert record["closed"] is True
 
 
-def test_existing_file_is_never_overwritten(tmp_path, jar):
-    out_dir = tmp_path / "2026"
-    out_dir.mkdir()
+def test_existing_file_is_never_overwritten(out_dir, jar):
     existing = out_dir / f"2026-01-01_{ORDER}_Invoice.pdf"
     existing.write_bytes(b"keep me")
     record = {}
-    page = FakePage(SUMMARY, record=record)
+    page = FakePage({ORDER: _summary(ORDER)}, record=record)
     with pytest.raises(FileExistsError):
         save_order_invoice_pdf(ORDER, out_dir, jar_path=jar, playwright_factory=_factory(page, record))
     assert existing.read_bytes() == b"keep me"
-    assert "pdf_path" not in record
+    assert "pdfs" not in record
 
 
 def test_missing_output_folder_is_refused_before_browsing(tmp_path, jar):
     record = {}
+    page = FakePage({ORDER: _summary(ORDER)}, record=record)
     with pytest.raises(ValueError):
-        save_order_invoice_pdf(ORDER, tmp_path / "nope", jar_path=jar, playwright_factory=_factory(FakePage(SUMMARY, record=record), record))
+        save_order_invoice_pdf(ORDER, tmp_path / "nope", jar_path=jar, playwright_factory=_factory(page, record))
+    assert record == {}
+
+
+def test_batch_saves_skips_and_reports_errors(out_dir, jar):
+    existing = out_dir / f"2026-01-01_{OTHER}_Invoice.pdf"
+    existing.write_bytes(b"keep me")
+    third = "111-0000000-0000003"
+    record = {}
+    texts = {
+        ORDER: _summary(ORDER),
+        OTHER: _summary(OTHER),
+        third: "Order Summary with no date on it",
+    }
+    page = FakePage(texts, record=record)
+    results = save_order_invoices([ORDER, OTHER, third], out_dir, jar_path=jar, playwright_factory=_factory(page, record))
+
+    by_id = {r["order_id"]: r for r in results}
+    assert by_id[ORDER]["status"] == "saved"
+    assert Path(by_id[ORDER]["path"]).name == f"2026-01-01_{ORDER}_Invoice.pdf"
+    assert by_id[OTHER]["status"] == "skipped"
+    assert by_id[third]["status"] == "error"
+    assert existing.read_bytes() == b"keep me"
+    assert record["closed"] is True
+
+
+def test_batch_drops_repeated_order_ids(out_dir, jar):
+    record = {}
+    page = FakePage({ORDER: _summary(ORDER)}, record=record)
+    results = save_order_invoices([ORDER, ORDER], out_dir, jar_path=jar, playwright_factory=_factory(page, record))
+    assert [r["order_id"] for r in results] == [ORDER]
+    assert len(record["pdfs"]) == 1
+
+
+def test_batch_stops_when_session_expires(out_dir, jar):
+    record = {}
+    page = FakePage({ORDER: _summary(ORDER), OTHER: _summary(OTHER)}, expired={OTHER}, record=record)
+    with pytest.raises(NonInteractiveAuthRequired):
+        save_order_invoices([ORDER, OTHER], out_dir, jar_path=jar, playwright_factory=_factory(page, record))
+    assert len(record["pdfs"]) == 1  # the first order was saved and kept
+    assert record["closed"] is True
+
+
+def test_batch_rejects_bad_id_before_browsing(out_dir, jar):
+    record = {}
+    page = FakePage({ORDER: _summary(ORDER)}, record=record)
+    with pytest.raises(ValueError):
+        save_order_invoices([ORDER, "bad"], out_dir, jar_path=jar, playwright_factory=_factory(page, record))
     assert record == {}
