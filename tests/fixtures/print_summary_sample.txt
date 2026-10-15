@@ -1,0 +1,41 @@
+Order Summary
+Order placed January 1, 2026  Order # 111-0000000-0000000
+Print
+Order Summary
+Item(s) Subtotal:
+$108.76
+Shipping & Handling:
+$0.00
+Total before tax:
+$108.76
+Estimated tax to be collected:
+$7.06
+Grand Total:
+$115.82
+Refund Total 
+$31.88
+Sample Plush Toy, 12 Inch Stuffed Animal, Sample Edition
+Sold by: Sample Seller A
+Return window closed on February 4, 2026
+$23.99
+$23.99
+Sample Tea Collection (40 count), Sample Gift Box
+Sold by: Sample Seller B
+Return window closed on February 6, 2026
+$27.99
+$27.99
+Sample First Aid Tool - Sample Insect Relief, 3 Pack
+Sold by: Sample Seller C
+Supplied by: Other
+Return window closed on February 2, 2026
+$26.99
+$26.99
+Return complete
+Your return is complete. Your refund has been issued.
+When will I get my refund?
+Sample Wine Bottles (Pack of 12) Sample Glass Bottles
+Sold by: Amazon.com
+Supplied by: Other
+$29.79
+$29.79
+Back to top
