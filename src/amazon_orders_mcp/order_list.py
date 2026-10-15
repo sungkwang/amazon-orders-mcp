@@ -39,6 +39,7 @@ ITEM_ACTIONS = (
 PAGE_URL = "https://www.amazon.com/your-orders/orders?timeFilter=year-{year}&startIndex={start}"
 PAGE_SIZE = 10
 MAX_PAGES = 100
+ORDER_MARKER_RE = re.compile(r"ORDER #|Order #|ORDER PLACED|Order placed", re.IGNORECASE)
 
 
 def _order_blocks(text: str) -> List[List[str]]:
@@ -83,15 +84,20 @@ def list_orders_for_year(
     jar_path: Path = COOKIE_JAR_PATH,
     playwright_factory: Callable[[], Any] = sync_playwright,
     on_page: Optional[Callable[[int, int, float], None]] = None,
-) -> List[Dict[str, Any]]:
+) -> Dict[str, Any]:
     """Page through one year of orders until a page adds nothing new.
 
-    `on_page(page_number, orders_so_far, seconds_elapsed)` is called after each
-    page, so a caller can show progress.
+    Returns {"orders": [...], "truncated": bool, "warning": str | None}.
+    `truncated` is true when the MAX_PAGES cap was reached before the list ended.
+    `on_page(page_number, orders_so_far, seconds_elapsed)` is called after each page.
+    Raises ParseStructureError when a page visibly contains orders but none can be parsed.
     """
+    from amazon_orders_mcp.errors import ParseStructureError, snippet_of
+
     seen = set()
     orders: List[Dict[str, Any]] = []
     started = time.monotonic()
+    ended = False
     with playwright_factory() as p:
         browser = p.chromium.launch(headless=True)
         try:
@@ -100,13 +106,22 @@ def list_orders_for_year(
             page = context.new_page()
             for page_index in range(MAX_PAGES):
                 start = page_index * PAGE_SIZE
-                page.goto(PAGE_URL.format(year=year, start=start), wait_until="domcontentloaded", timeout=60000)
+                url = PAGE_URL.format(year=year, start=start)
+                page.goto(url, wait_until="domcontentloaded", timeout=60000)
                 page.wait_for_timeout(1500)
                 if "/ap/signin" in page.url:
                     raise NonInteractiveAuthRequired("Amazon redirected to sign-in; the saved session has expired.")
-                found = parse_order_list_text(page.evaluate("() => document.body.innerText"))
+                text = page.evaluate("() => document.body.innerText")
+                found = parse_order_list_text(text)
+                if not found and ORDER_MARKER_RE.search(text):
+                    raise ParseStructureError(
+                        "The order list shows orders, but none could be read. Amazon may have changed the page layout.",
+                        url=url,
+                        snippet=snippet_of(text),
+                    )
                 new = [o for o in found if o["order_id"] not in seen]
                 if not new:
+                    ended = True
                     break
                 for o in new:
                     seen.add(o["order_id"])
@@ -115,7 +130,13 @@ def list_orders_for_year(
                     on_page(page_index + 1, len(orders), time.monotonic() - started)
         finally:
             browser.close()
-    return orders
+    truncated = not ended
+    warning = (
+        f"Stopped after {MAX_PAGES} pages; the list for {year} may be incomplete."
+        if truncated
+        else None
+    )
+    return {"orders": orders, "truncated": truncated, "warning": warning}
 
 
 def _order_date(text: Optional[str]):

@@ -149,3 +149,19 @@ def test_browser_cookies_adds_domain_path_and_secure(tmp_path):
         assert c["domain"] == ".amazon.com"
         assert c["path"] == "/"
         assert c["secure"] is True
+
+
+def test_jar_is_replaced_without_leaving_a_temp_file(tmp_path):
+    jar = tmp_path / "cookies.json"
+    jar.write_text('{"old": "value"}')
+    browser = FakeBrowser([[_cookie("x-main", value="new")]])
+
+    capture_session(
+        timeout_seconds=10,
+        jar_path=jar,
+        playwright_factory=fake_playwright_factory(browser),
+        sleep=lambda s: None,
+    )
+
+    assert json.loads(jar.read_text()) == {"x-main": "new"}
+    assert not (tmp_path / "cookies.json.tmp").exists()

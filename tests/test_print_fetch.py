@@ -131,3 +131,16 @@ def test_expired_session_in_get_order_points_to_refresh(monkeypatch):
 
     assert out["action_required"] == "refresh_session"
     assert "refresh_session" in out["error"]
+
+
+def test_get_order_with_no_items_reports_a_parse_error(monkeypatch):
+    import json as _json
+
+    from amazon_orders_mcp import server as _server
+
+    monkeypatch.setattr(_server, "fetch_print_page", lambda order_id: ("Order Summary\nOrder placed January 1, 2026\nGrand Total:\n$1.00\n", "<html></html>"))
+    out = _json.loads(asyncio.run(_server.get_order(ORDER)))
+    assert out["exception_type"] == "ParseStructureError"
+    assert "items" in out["error"]
+    assert out["url"].startswith("https://www.amazon.com/gp/css/summary/print.html")
+    assert "Order placed" in out["snippet"]

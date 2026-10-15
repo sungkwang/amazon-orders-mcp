@@ -2,8 +2,8 @@
 Secure credential + cookie management for the Amazon Orders MCP server.
 
 Credentials (email, password, optional TOTP secret) are stored in the system
-keyring. Amazon session cookies are persisted by the amazon-orders library to
-a data directory owned by this server (isolated from any other amazon-orders
+keyring. Amazon session cookies are saved by session_capture to
+a data directory owned by this server (isolated from any other tool
 usage on the host).
 """
 

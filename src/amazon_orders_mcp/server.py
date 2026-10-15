@@ -26,9 +26,11 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from amazon_orders_mcp.client import NonInteractiveAuthRequired
 from amazon_orders_mcp.secure_session import cookie_jar_exists, load_credentials
 from amazon_orders_mcp.session_capture import capture_session
-from amazon_orders_mcp.print_fetch import fetch_print_page
-from amazon_orders_mcp.print_parser import parse_print_page
+from amazon_orders_mcp.errors import ParseStructureError
+from amazon_orders_mcp.print_fetch import PRINT_URL, fetch_print_page
+from amazon_orders_mcp.print_parser import parse_print_page, validate_order_summary
 from amazon_orders_mcp.order_list import list_orders_for_year, match_orders_by_amount
+from amazon_orders_mcp.product_check import check_product_eligibility
 
 
 class TransactionQuery(BaseModel):
@@ -105,9 +107,31 @@ async def _run_blocking(
             f"{e} Call the refresh_session tool, sign in, then retry.",
             action_required="refresh_session",
         )
+    except ParseStructureError as e:
+        logger.warning(f"{tool_name} could not read the page: {e}")
+        return _error(str(e), exception_type="ParseStructureError", url=e.url, snippet=e.snippet, tool=tool_name)
     except Exception as e:
         logger.exception(f"{tool_name} failed")
         return _error(f"{tool_name} failed: {e}", exception_type=type(e).__name__)
+
+
+def _with_auto_refresh(fn: Callable[..., Any]) -> Callable[..., Any]:
+    """On an expired session, open the sign-in window once and retry the call.
+
+    Runs on the worker thread. If sign-in does not finish, the original
+    NonInteractiveAuthRequired is raised and _run_blocking reports it as before.
+    """
+
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return fn(*args, **kwargs)
+        except NonInteractiveAuthRequired:
+            logger.info("Amazon session expired; opening the sign-in window")
+            if not capture_session(timeout_seconds=REFRESH_TIMEOUT_DEFAULT)["ok"]:
+                raise
+            return fn(*args, **kwargs)
+
+    return wrapper
 
 
 # ---------------------------------------------------------------------------
@@ -118,29 +142,27 @@ async def _run_blocking(
 @mcp.tool()
 def setup_authentication() -> str:
     """Get instructions for setting up Amazon authentication."""
-    return """🛒 Amazon Orders MCP — One-Time Setup
+    return """🛒 Amazon Orders MCP — Sign-in is required first
 
-Amazon blocks the Python `requests` library's sign-in flow with a JavaScript
-WAF challenge, so this server authenticates by capturing cookies from a real
-Chromium browser session instead.
+Amazon blocks scripted sign-in, so this server uses the session from a real
+browser window. Sign in once before the order tools will work.
 
-1️⃣  Call the `refresh_session` tool (a browser window opens).
+1️⃣  Call the `refresh_session` tool. A Chromium window opens on Amazon's
+    sign-in page.
 
-2️⃣  A Chromium window will open to the Amazon sign-in page.
-    Enter your email, password, and any 2FA code as usual.
+2️⃣  Sign in as usual, including any 2FA code. The window closes when the
+    session is saved to ~/.amazon-orders-mcp/cookies.json.
 
-3️⃣  The script auto-detects when you're signed in, extracts the cookies,
-    and writes them to ~/.amazon-orders-mcp/cookies.json.
+3️⃣  Then these tools work without another sign-in:
+    • get_order_history(year) - orders for one year
+    • get_order(order_id) - totals and items for one order
+    • match_transactions_by_amount - match bank amounts to orders
+    • check_asin_eligibility(asin) - "FSA or HSA eligible" label (no sign-in)
 
-4️⃣  After that, use these tools from Claude:
-    • get_order_history - List orders (by year or time filter)
-    • get_order - Full details for a single order
-    • get_transactions - Amazon payments/transactions feed
-    • match_transactions_by_amount - Cross-reference bank txns with Amazon
-
-✅ Cookies persist until Amazon expires them (typically weeks)
-✅ No credentials are stored — cookie jar only
-🔁 When cookies expire, call the refresh_session tool"""
+✅ No password is stored; only the session cookies
+🔁 If Amazon ends the session, the order tools open the sign-in window once
+   and retry automatically. If sign-in isn't finished in about 3 minutes,
+   the request fails; try again."""
 
 
 @mcp.tool()
@@ -159,7 +181,7 @@ def check_auth_status() -> str:
     if has_cookies:
         status_lines.append("✅ Cookie jar exists at ~/.amazon-orders-mcp/cookies.json")
         status_lines.append(
-            "   Try `get_order_history(time_filter='last30')` to verify they still work."
+            "   Try `get_order_history(year=2026)` to verify they still work."
         )
     else:
         status_lines.append("❌ No cookie jar found")
@@ -215,8 +237,16 @@ def _blocking_get_order_history(
     full_details: bool,
     start_index: Optional[int],
 ) -> str:
-    if time_filter is not None:
-        return _error("time_filter is not supported yet; pass a year instead.", tool="get_order_history")
+    unsupported = [name for name, given in (
+        ("time_filter", time_filter is not None),
+        ("full_details", full_details),
+        ("start_index", start_index is not None),
+    ) if given]
+    if unsupported:
+        return _error(
+            f"Not supported yet: {', '.join(unsupported)}. Pass a year only.",
+            tool="get_order_history",
+        )
     target_year = year or date.today().year
     return _json(list_orders_for_year(target_year))
 
@@ -239,22 +269,24 @@ async def get_order_history(
         start_index: Paging offset into results.
 
     Returns:
-        JSON array of serialized Order objects.
+        JSON array of orders: order_id, order_date, total, item_titles.
     """
     return await _run_blocking(
-        _blocking_get_order_history,
+        _with_auto_refresh(_blocking_get_order_history),
         year,
         time_filter,
         full_details,
         start_index,
-        timeout=TIMEOUT_PAGED_CALL,
+        timeout=TIMEOUT_PAGED_CALL + REFRESH_TIMEOUT_DEFAULT,
         tool_name="get_order_history",
     )
 
 
 def _blocking_get_order(order_id: str) -> str:
     text, html = fetch_print_page(order_id)
-    return _json(parse_print_page(text, html))
+    parsed = parse_print_page(text, html)
+    validate_order_summary(parsed, url=PRINT_URL.format(order_id=order_id), text=text)
+    return _json(parsed)
 
 
 @mcp.tool()
@@ -265,12 +297,12 @@ async def get_order(order_id: str) -> str:
         order_id: Amazon order number (e.g. "112-1234567-1234567").
 
     Returns:
-        JSON object with serialized Order data (always full details).
+        JSON object: order_id, order_date, totals, and items (title, seller, price, refund_status, asin, image_id).
     """
     return await _run_blocking(
-        _blocking_get_order,
+        _with_auto_refresh(_blocking_get_order),
         order_id,
-        timeout=TIMEOUT_SINGLE_CALL,
+        timeout=TIMEOUT_SINGLE_CALL + REFRESH_TIMEOUT_DEFAULT,
         tool_name="get_order",
     )
 
@@ -330,10 +362,10 @@ async def match_transactions_by_amount(
         )
 
     return await _run_blocking(
-        _blocking_match_transactions_by_amount,
+        _with_auto_refresh(_blocking_match_transactions_by_amount),
         parsed_queries,
         tolerance,
-        timeout=TIMEOUT_PAGED_CALL,
+        timeout=TIMEOUT_PAGED_CALL + REFRESH_TIMEOUT_DEFAULT,
         tool_name="match_transactions_by_amount",
     )
 
@@ -341,6 +373,31 @@ async def match_transactions_by_amount(
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
+
+def _blocking_check_asin_eligibility(asin: str) -> str:
+    return _json(check_product_eligibility(asin))
+
+
+@mcp.tool()
+async def check_asin_eligibility(asin: str) -> str:
+    """Check a public Amazon product page for the FSA or HSA eligible label.
+
+    No sign-in is used; one product page is loaded. Call only for candidate
+    items, not for every order.
+
+    Args:
+        asin: The product ID (10 letters or digits), from an order's item link.
+
+    Returns:
+        JSON object: asin, fsa_hsa_eligible, matched_text, checked_date.
+    """
+    return await _run_blocking(
+        _blocking_check_asin_eligibility,
+        asin,
+        timeout=TIMEOUT_SINGLE_CALL,
+        tool_name="check_asin_eligibility",
+    )
 
 
 def main() -> None:

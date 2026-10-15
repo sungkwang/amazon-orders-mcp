@@ -114,3 +114,22 @@ def parse_print_page(text: str, html: str) -> Dict[str, Any]:
     for index, item in enumerate(parsed["items"]):
         item.update(links.get(index, {}))
     return parsed
+
+
+def validate_order_summary(parsed: Dict[str, Any], url: str, text: str) -> None:
+    """Raise ParseStructureError if a printable summary lacks its required fields."""
+    from amazon_orders_mcp.errors import ParseStructureError, snippet_of
+
+    missing = []
+    if not parsed.get("items"):
+        missing.append("items")
+    if parsed.get("totals", {}).get("grand_total") is None:
+        missing.append("grand total")
+    if not parsed.get("order_date"):
+        missing.append("order date")
+    if missing:
+        raise ParseStructureError(
+            f"Order summary is missing: {', '.join(missing)}. Amazon may have changed the page layout.",
+            url=url,
+            snippet=snippet_of(text),
+        )

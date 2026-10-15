@@ -6,6 +6,7 @@ so tests run without opening Amazon.
 """
 
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List
@@ -86,11 +87,14 @@ def capture_session(
                 pass  # already closed by the user
 
     jar_path.parent.mkdir(parents=True, exist_ok=True)
-    jar_path.write_text(json.dumps(flat))
+    # Write a temp file, then swap it in, so an interrupted write never leaves a truncated jar
+    tmp_path = jar_path.with_suffix(".json.tmp")
+    tmp_path.write_text(json.dumps(flat))
     try:
-        jar_path.chmod(0o600)
+        tmp_path.chmod(0o600)
     except OSError:
         pass  # Windows ignores POSIX modes
+    os.replace(tmp_path, jar_path)
     return _result(
         True,
         f"Saved {len(flat)} Amazon cookies to {jar_path}.",

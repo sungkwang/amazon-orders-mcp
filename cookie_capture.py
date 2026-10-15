@@ -52,7 +52,8 @@ def main() -> int:
         )
 
     try:
-        orders = list_orders_for_year(year, on_page=show_progress)
+        result = list_orders_for_year(year, on_page=show_progress)
+        orders = result["orders"]
         print(f"✅ Found {len(orders)} orders for {year}")
     except Exception as e:
         print(f"⚠️  Test fetch failed: {type(e).__name__}: {e}")

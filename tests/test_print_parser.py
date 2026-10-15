@@ -75,3 +75,36 @@ def test_parse_print_page_attaches_asin_to_each_item(parsed):
     assert by_seller["Sample Seller A"]["asin"] == "B0D8B5M9K1"
     assert by_seller["Sample Seller C"]["asin"] == "B01EAS3ER8"
     assert by_seller["Sample Seller C"]["image_id"] == "51egPDp3D1L"
+
+
+def test_validate_accepts_a_complete_summary(parsed):
+    from amazon_orders_mcp.print_parser import validate_order_summary
+
+    validate_order_summary(parsed, url="https://example.test/print", text=FIXTURE.read_text(encoding="utf-8"))
+
+
+def test_validate_rejects_a_summary_with_no_items(parsed):
+    import pytest as _pytest
+
+    from amazon_orders_mcp.errors import ParseStructureError
+    from amazon_orders_mcp.print_parser import validate_order_summary
+
+    parsed["items"] = []
+    with _pytest.raises(ParseStructureError) as info:
+        validate_order_summary(parsed, url="https://example.test/print", text="Some page text")
+    assert "items" in str(info.value)
+    assert info.value.url == "https://example.test/print"
+    assert info.value.snippet == "Some page text"
+
+
+def test_validate_rejects_missing_total_and_date(parsed):
+    import pytest as _pytest
+
+    from amazon_orders_mcp.errors import ParseStructureError
+    from amazon_orders_mcp.print_parser import validate_order_summary
+
+    parsed["totals"]["grand_total"] = None
+    parsed["order_date"] = None
+    with _pytest.raises(ParseStructureError) as info:
+        validate_order_summary(parsed, url="u", text="t")
+    assert "grand total" in str(info.value) and "order date" in str(info.value)

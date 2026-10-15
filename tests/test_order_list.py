@@ -103,14 +103,15 @@ def test_progress_callback_reports_each_page(tmp_path):
             return False
 
     calls = []
-    orders = list_orders_for_year(
+    result = list_orders_for_year(
         2026,
         jar_path=jar,
         playwright_factory=lambda: _Playwright(),
         on_page=lambda page, count, seconds: calls.append((page, count)),
     )
 
-    assert len(orders) == 3
+    assert len(result["orders"]) == 3
+    assert result["truncated"] is False
     assert calls == [(1, 3)]
 
 

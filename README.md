@@ -1,193 +1,98 @@
 # Amazon Orders MCP
 
-A [Model Context Protocol](https://modelcontextprotocol.io) server that exposes
-Amazon.com personal order history and payment transactions to MCP-compatible
-clients like [Claude Code](https://claude.com/claude-code).
+A [Model Context Protocol](https://modelcontextprotocol.io) server that lets
+Claude read your own Amazon.com order history: order totals, items, sellers,
+and whether a product is marked "FSA or HSA eligible." It only reads pages. It
+never buys, adds to a cart, or changes an order.
 
-Under the hood it wraps the excellent
-[`amazon-orders`](https://github.com/alexdlaird/amazon-orders) Python library,
-adding:
+## First-time setup (sign-in is required first)
 
-- A system-keyring-backed credential store (email, password, TOTP secret).
-- Cookie persistence isolated to `~/.amazon-orders-mcp/`.
-- A non-interactive IO adapter that fails fast on captcha prompts instead of
-  hanging the server.
-- Serialization of amazon-orders entities to plain JSON (the upstream library
-  does not expose `to_dict()`).
-- A `match_transactions_by_amount` helper for cross-referencing external
-  bank/credit-card transactions (e.g. from Monarch Money) against Amazon
-  orders by date and amount.
+The server uses your normal Amazon session, saved as cookies on your computer.
+It does not store your password. You sign in once in a browser window, and the
+server reuses that session.
 
-## Why
+1. Install the requirements (Python 3.11 or 3.12, then `pip install -e .` in
+   this folder). The first run also needs Playwright's browser:
+   `python -m playwright install chromium`.
+2. Start a sign-in: ask Claude to run `refresh_session`, or run
+   `python cookie_capture.py` in this folder.
+3. A Chromium window opens on Amazon's sign-in page. Sign in as usual,
+   including any 2FA code. The window closes when the session is saved to
+   `~/.amazon-orders-mcp/cookies.json`.
 
-Amazon does not offer a public API for personal order history. The only way
-to get structured data is to scrape the logged-in user's own pages. This MCP
-server makes that data available to LLM tools in a clean, programmatic way
-so you can match bank transactions against real order contents, categorize
-spending, audit returns, etc.
+Amazon ends sessions on its own schedule. When that happens, the read tools open
+the sign-in window once and retry the request. If you don't finish signing in
+within about three minutes, the request fails and you can try again.
 
-## Features
+## Tools
 
-| Tool | Description |
-| --- | --- |
-| `check_auth_status` | Check whether credentials and cookies are stored |
-| `setup_authentication` | Get setup instructions |
-| `get_order_history` | Fetch orders by year or time filter |
-| `get_order` | Fetch full details for a specific order number |
-| `get_transactions` | Fetch the Amazon payments/transactions feed by date range |
-| `match_transactions_by_amount` | Cross-reference external txns against Amazon by date + amount |
+| Tool | Opens a browser? | Needs sign-in? | What it does |
+| --- | --- | --- | --- |
+| `refresh_session` | Yes, a visible sign-in window | — | Signs in and saves the session |
+| `check_auth_status` | No | No | Checks whether a session file exists |
+| `setup_authentication` | No | No | Shows the setup steps |
+| `get_order_history(year)` | Yes, invisible | Yes | Lists one year's orders, about 2–3 seconds per page |
+| `get_order(order_id)` | Yes, invisible | Yes | Totals, items, sellers, and ASINs for one order |
+| `match_transactions_by_amount` | Yes, invisible | Yes | Matches amounts to orders by date |
+| `check_asin_eligibility(asin)` | Yes, invisible | No | Reads the public product page for "FSA or HSA eligible" |
 
-## Requirements
+"Invisible" means a headless browser loads the page in the background, and you
+won't see a window.
 
-- Python 3.11 or 3.12 (3.13 not yet supported by the upstream library)
-- [uv](https://docs.astral.sh/uv/) (recommended) or pip
-- An Amazon.com account (US only — international Amazon sites are not supported)
-- 2FA recommended, with access to the TOTP secret key for automation
+## What to expect
 
-## Installation
-
-Clone and install dependencies with uv:
-
-```bash
-git clone https://github.com/seanoliver/amazon-orders-mcp.git
-cd amazon-orders-mcp
-uv sync
-```
-
-## One-time setup — cookie capture
-
-**Why this is necessary:** Amazon's JavaScript WAF blocks `requests`-based
-logins with challenge pages the `amazon-orders` library cannot solve. Even
-with correct credentials and a TOTP secret, `session.login()` typically
-fails with `A JavaScript-based authentication challenge page has been found`.
-
-The reliable workaround — used by this server — is to capture cookies from
-a real Chromium browser after you sign in normally, then hand them to
-`amazon-orders`. The library checks for the `x-main` cookie and short-circuits
-its login flow when one is present.
-
-### Step-by-step
-
-```bash
-uv run python cookie_capture.py
-```
-
-A Chromium window will open. Sign in to Amazon normally — email, password,
-and any 2FA code (SMS or authenticator app — both work fine since you're
-doing it interactively).
-
-As soon as the `x-main` cookie is set, the script:
-
-1. Navigates to your order history page to warm up the session.
-2. Extracts all `*.amazon.com` cookies (including httpOnly ones).
-3. Writes them in the flat `{name: value}` format `amazon-orders` expects to
-   `~/.amazon-orders-mcp/cookies.json` with `0600` permissions.
-4. Runs a smoke test by fetching the last 30 days of transactions.
-
-### Cookie lifetime
-
-Cookies persist until Amazon expires them — typically several weeks. When
-the server starts returning auth errors, just re-run `cookie_capture.py`.
-
-### Alternative (not recommended): credential-based login
-
-`login_setup.py` is provided as a secondary path for environments where
-the JavaScript WAF challenge doesn't fire. In practice this is rare.
-
-```bash
-uv run python login_setup.py
-```
-
-If you go this route, credentials are stored in the system keyring under
-`com.mcp.amazon-orders-mcp`.
+- If Amazon changes a page's layout, the tool returns an error with the page
+  address and a short text snippet. It does not guess at the data. Fixing it
+  means updating the parser and its test fixtures. Ask a coding assistant to
+  do this with the error text and the saved page text.
+- An eligibility result of "not marked" means the label is absent from the
+  product page. It does not prove the item is ineligible.
+- The server is for US Amazon.com accounts only.
 
 ## Register with Claude Code
 
-Add the server to your Claude Code MCP configuration. For `~/.claude.json` or
-the equivalent MCP settings file:
+Add the server to your Claude Code MCP settings (`~/.claude.json` or the
+project's `.mcp.json`):
 
 ```json
 {
   "mcpServers": {
     "amazon-orders": {
-      "command": "uv",
-      "args": [
-        "--directory",
-        "/absolute/path/to/amazon-orders-mcp",
-        "run",
-        "amazon-orders-mcp"
-      ]
+      "command": "python",
+      "args": ["-m", "amazon_orders_mcp.server"],
+      "cwd": "/absolute/path/to/amazon-orders-mcp"
     }
   }
 }
 ```
 
-Then restart Claude Code.
+Restart Claude Code, then run `/mcp` to confirm `amazon-orders` is connected.
 
-## Usage examples
+## Privacy
 
-Inside a Claude Code session:
-
-```
-Use get_transactions for the last 90 days and summarize the categories of
-spending.
-```
-
-```
-I have 5 bank transactions I can't identify. Use match_transactions_by_amount
-with this JSON: [{"date": "2026-03-04", "amount": -35.01}, ...]
-```
-
-```
-Fetch full details for Amazon order 112-1234567-1234567.
-```
-
-## Notes and caveats
-
-- **US Amazon.com only.** International sites (.co.uk, .de, etc.) are not
-  supported by the underlying library.
-- **DOM scraping.** Amazon periodically changes its HTML. If tools start
-  returning `Check if Amazon changed the HTML` errors, upgrade the
-  `amazon-orders` dependency or wait for a fix upstream.
-- **Captcha handling.** The server refuses to prompt on captcha challenges —
-  it raises `NonInteractiveAuthRequired`. If that happens, re-run
-  `login_setup.py` interactively to solve the captcha and refresh cookies.
-- **Rate limiting.** Amazon may throttle you if you fetch many orders with
-  `full_details=True` in quick succession. There's no hard rate limit in the
-  library; be conservative.
-- **Transaction sign convention.** `amazon-orders` returns charges as
-  negative `grand_total` and refunds as positive. `match_transactions_by_amount`
-  assumes the external query uses the same convention.
+- Cookies stay on your computer in `~/.amazon-orders-mcp/cookies.json`. Don't
+  share that file.
+- Tool results, including order details, appear in your Claude conversation.
+  Decide what you save or share from there.
 
 ## Development
 
-Run formatters and tests:
-
 ```bash
-uv run black src
-uv run isort src
-uv run mypy src
-uv run pytest
+pip install -e ".[dev]"
+pytest
 ```
+
+The tests use fake browsers and synthetic page text. They don't contact Amazon.
+`scripts/live_smoke_test.py` makes real Amazon requests. Run it only by hand,
+when you choose to.
 
 ## License
 
 MIT. See [LICENSE](LICENSE).
 
-## Acknowledgements
+## Credits
 
-- [`amazon-orders`](https://github.com/alexdlaird/amazon-orders) by Alex Laird —
-  the library that does all the real work.
-- [`monarch-mcp-server`](https://github.com/robcerda/monarch-mcp-server) by
-  Rob Cerda — template for the MCP scaffolding and keyring pattern.
-
-## List one year of orders (script)
-`tools/list-orders/list-orders-by-year.mjs` lists a year of Amazon orders with the session saved by `cookie_capture.py`. It is read-only.
-
-```
-cd tools/list-orders
-npm install
-node list-orders-by-year.mjs 2026 orders_2026.json
-```
-
-The output is a JSON list with order number, date, total, and the raw order text. Amazon may throttle or challenge frequent requests, so run it occasionally.
+- Started from [amazon-orders-mcp](https://github.com/seanoliver/amazon-orders-mcp)
+  by Sean Oliver (MIT). The server design has changed substantially since.
+- Earlier versions used [amazon-orders](https://github.com/alexdlaird/amazon-orders)
+  by Alex Laird. This version no longer depends on it.
