@@ -1,0 +1,15 @@
+Oct 14, 2026·AMZN Mktp US
+Prime Visa••••0000
+Order #111-0000000-0000001
+-$8.98
+Charged
+Oct 12, 2026·Amazon.com
+Prime Visa••••0000
+Order #111-0000000-0000002
+-$18.29
+Charged
+Feb 04, 2026·Amazon.com
+Prime Visa••••0000
+Order #111-0000000-0000003
+$6.78
+Refunded

@@ -7,28 +7,14 @@ import asyncio
 import json
 
 import pytest
-from amazonorders.exception import AmazonOrdersAuthError
 
 from amazon_orders_mcp import server
 from amazon_orders_mcp.client import NonInteractiveAuthRequired
 from amazon_orders_mcp.server import _clamp_refresh_timeout, _run_blocking
 
 
-def _raise_auth_error():
-    raise AmazonOrdersAuthError("Amazon redirected to sign-in")
-
-
 def _raise_non_interactive():
     raise NonInteractiveAuthRequired("Amazon requires interactive input (captcha)")
-
-
-def test_expired_session_points_to_refresh_tool():
-    out = json.loads(
-        asyncio.run(_run_blocking(_raise_auth_error, timeout=5, tool_name="get_order"))
-    )
-    assert out["action_required"] == "refresh_session"
-    assert "refresh_session" in out["error"]
-    assert "cookie_capture" not in out["error"]
 
 
 def test_interactive_challenge_points_to_refresh_tool():

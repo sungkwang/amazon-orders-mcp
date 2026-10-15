@@ -19,26 +19,16 @@ import truststore
 
 truststore.inject_into_ssl()  # use the Windows certificate store (corporate/AV proxies)
 
-from amazonorders.exception import AmazonOrdersAuthError
 from dotenv import load_dotenv
 from mcp.server.mcpserver import MCPServer
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from amazon_orders_mcp.client import (
-    NonInteractiveAuthRequired,
-    build_session,
-    ensure_authenticated,
-)
+from amazon_orders_mcp.client import NonInteractiveAuthRequired
 from amazon_orders_mcp.secure_session import cookie_jar_exists, load_credentials
 from amazon_orders_mcp.session_capture import capture_session
 from amazon_orders_mcp.print_fetch import fetch_print_page
 from amazon_orders_mcp.print_parser import parse_print_page
-from amazon_orders_mcp.serialize import (
-    serialize_order,
-    serialize_orders,
-    serialize_transaction,
-    serialize_transactions,
-)
+from amazon_orders_mcp.order_list import list_orders_for_year, match_orders_by_amount
 
 
 class TransactionQuery(BaseModel):
@@ -114,19 +104,6 @@ async def _run_blocking(
         return _error(
             f"{e} Call the refresh_session tool, sign in, then retry.",
             action_required="refresh_session",
-        )
-    except AmazonOrdersAuthError as e:
-        # This covers both AmazonOrdersAuthError (WAF challenge / bad session)
-        # and its subclass AmazonOrdersAuthRedirectError (Amazon redirected
-        # us to the sign-in page). In either case, the cookies are stale.
-        logger.warning(f"{tool_name} hit auth error: {e}")
-        return _error(
-            "Amazon session has expired. Call the refresh_session tool, sign in "
-            "in the browser window, then retry.",
-            action_required="refresh_session",
-            underlying_error=str(e),
-            exception_type=type(e).__name__,
-            tool=tool_name,
         )
     except Exception as e:
         logger.exception(f"{tool_name} failed")
@@ -238,19 +215,10 @@ def _blocking_get_order_history(
     full_details: bool,
     start_index: Optional[int],
 ) -> str:
-    from amazonorders.orders import AmazonOrders
-
-    session = build_session()
-    ensure_authenticated(session)
-    amazon_orders = AmazonOrders(session)
-
-    orders = amazon_orders.get_order_history(
-        year=year,
-        start_index=start_index,
-        full_details=full_details,
-        time_filter=time_filter,
-    )
-    return _json(serialize_orders(orders))
+    if time_filter is not None:
+        return _error("time_filter is not supported yet; pass a year instead.", tool="get_order_history")
+    target_year = year or date.today().year
+    return _json(list_orders_for_year(target_year))
 
 
 @mcp.tool()
@@ -312,124 +280,19 @@ async def get_order(order_id: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _fetch_transactions_for_range(
-    start_date: Optional[str], end_date: Optional[str], days: Optional[int]
-) -> List[Any]:
-    """Helper: fetch transactions for a date range by computing days-back.
-
-    The amazon-orders library only accepts `days` back from today. We compute
-    the right `days` value and filter the results client-side.
-    """
-    from amazonorders.transactions import AmazonTransactions
-
-    session = build_session()
-    ensure_authenticated(session)
-    amazon_transactions = AmazonTransactions(session)
-
-    if days is not None:
-        return cast(List[Any], amazon_transactions.get_transactions(days=days))
-
-    if start_date:
-        today = date.today()
-        start = date.fromisoformat(start_date)
-        end = date.fromisoformat(end_date) if end_date else today
-
-        # Amazon has no future transactions, and the library can only fetch
-        # backward from today. Bail out on ranges we can't resolve.
-        if start > today or end < start:
-            return []
-
-        days_back = (today - start).days + 1
-        all_txns = amazon_transactions.get_transactions(days=days_back)
-        filtered = [
-            t for t in all_txns if t.completed_date and start <= t.completed_date <= end
-        ]
-        return filtered
-
-    return cast(List[Any], amazon_transactions.get_transactions(days=365))
-
-
-def _blocking_get_transactions(
-    days: Optional[int],
-    start_date: Optional[str],
-    end_date: Optional[str],
-) -> str:
-    txns = _fetch_transactions_for_range(start_date, end_date, days)
-    return _json(serialize_transactions(txns))
-
-
-@mcp.tool()
-async def get_transactions(
-    days: Optional[int] = None,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
-) -> str:
-    """Fetch Amazon payment transactions (the cpe/yourpayments/transactions feed).
-
-    Provide EITHER `days` (back from today) OR `start_date`+`end_date` (YYYY-MM-DD).
-    If neither is supplied, defaults to the last 365 days.
-
-    Note: charges appear as NEGATIVE grand_total, refunds as POSITIVE.
-
-    Returns:
-        JSON array of serialized Transaction objects.
-    """
-    return await _run_blocking(
-        _blocking_get_transactions,
-        days,
-        start_date,
-        end_date,
-        timeout=TIMEOUT_PAGED_CALL,
-        tool_name="get_transactions",
-    )
-
-
 def _blocking_match_transactions_by_amount(
     parsed_queries: List[TransactionQuery],
     tolerance: float,
 ) -> str:
     if not parsed_queries:
         return _json([])
-
     earliest = min(q.date - timedelta(days=q.window_days) for q in parsed_queries)
     latest = max(q.date + timedelta(days=q.window_days) for q in parsed_queries)
-
-    txns = _fetch_transactions_for_range(
-        start_date=earliest.isoformat(),
-        end_date=latest.isoformat(),
-        days=None,
-    )
-
-    by_date: Dict[date, List[Any]] = {}
-    for t in txns:
-        if t.completed_date is not None:
-            by_date.setdefault(t.completed_date, []).append(t)
-
-    results = []
-    for q in parsed_queries:
-        matches = []
-        for offset in range(-q.window_days, q.window_days + 1):
-            check_date = q.date + timedelta(days=offset)
-            for t in by_date.get(check_date, []):
-                if t.grand_total is None:
-                    continue
-                if abs(t.grand_total - q.amount) <= tolerance:
-                    matches.append(
-                        {
-                            "date_offset_days": offset,
-                            **serialize_transaction(t),
-                        }
-                    )
-
-        results.append(
-            {
-                "query": q.model_dump(mode="json"),
-                "match_count": len(matches),
-                "matches": matches,
-            }
-        )
-
-    return _json(results)
+    orders: List[Dict[str, Any]] = []
+    for year in sorted({earliest.year, latest.year}):
+        orders.extend(list_orders_for_year(year))
+    queries = [q.model_dump() for q in parsed_queries]
+    return _json(match_orders_by_amount(orders, queries, tolerance))
 
 
 @mcp.tool()
@@ -437,7 +300,7 @@ async def match_transactions_by_amount(
     queries: List[Dict[str, Any]],
     tolerance: float = 0.01,
 ) -> str:
-    """Cross-reference external transactions (e.g. bank/credit card) against Amazon.
+    """Cross-reference external transactions (e.g. bank/credit card) against Amazon orders.
 
     Convenience tool for the Monarch-review workflow: given a list of
     {date, amount} pairs, find Amazon transactions that plausibly match.

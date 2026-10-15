@@ -36,16 +36,24 @@ def main() -> int:
         print("No cookies were saved. Run the script again to retry.")
         return 1
 
-    from amazonorders.transactions import AmazonTransactions
+    from datetime import date
 
-    from amazon_orders_mcp.client import build_session, ensure_authenticated
+    from amazon_orders_mcp.order_list import list_orders_for_year
 
-    print("\n🧪 Testing cookies by fetching the last 30 days of transactions...")
+    year = date.today().year
+    print(f"\n🧪 Testing cookies by listing {year} orders (about 2-3 seconds per page)...")
+
+    def show_progress(page_number, orders_so_far, seconds):
+        per_page = seconds / page_number
+        print(
+            f"   page {page_number}: {orders_so_far} orders so far "
+            f"({seconds:.0f}s elapsed, {per_page:.1f}s per page)",
+            flush=True,
+        )
+
     try:
-        session = build_session()
-        ensure_authenticated(session)
-        txns = AmazonTransactions(session).get_transactions(days=30)
-        print(f"✅ Retrieved {len(txns)} transactions from the last 30 days")
+        orders = list_orders_for_year(year, on_page=show_progress)
+        print(f"✅ Found {len(orders)} orders for {year}")
     except Exception as e:
         print(f"⚠️  Test fetch failed: {type(e).__name__}: {e}")
         print("   Cookies were saved but may not be valid.")
