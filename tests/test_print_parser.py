@@ -53,3 +53,25 @@ def test_empty_text_gives_no_items():
     assert parsed["order_id"] is None
     assert parsed["items"] == []
     assert all(v is None for v in parsed["totals"].values())
+
+
+def test_item_links_match_items_by_position():
+    from amazon_orders_mcp.print_parser import item_links
+
+    html = (Path(__file__).parent / "fixtures" / "print_item_links.txt").read_text(encoding="utf-8")
+    links = item_links(html)
+    assert links[0] == {"asin": "B0D8B5M9K1", "image_id": "71gCJU6br-L"}
+    assert links[2] == {"asin": "B01EAS3ER8", "image_id": "51egPDp3D1L"}
+    assert links[3]["asin"] == "B0CZGVZPKQ"
+
+
+def test_parse_print_page_attaches_asin_to_each_item(parsed):
+    from amazon_orders_mcp.print_parser import parse_print_page
+
+    text = FIXTURE.read_text(encoding="utf-8")
+    html = (Path(__file__).parent / "fixtures" / "print_item_links.txt").read_text(encoding="utf-8")
+    result = parse_print_page(text, html)
+    by_seller = {i["seller"]: i for i in result["items"]}
+    assert by_seller["Sample Seller A"]["asin"] == "B0D8B5M9K1"
+    assert by_seller["Sample Seller C"]["asin"] == "B01EAS3ER8"
+    assert by_seller["Sample Seller C"]["image_id"] == "51egPDp3D1L"

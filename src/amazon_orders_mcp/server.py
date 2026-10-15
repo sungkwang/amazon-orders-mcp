@@ -31,6 +31,8 @@ from amazon_orders_mcp.client import (
 )
 from amazon_orders_mcp.secure_session import cookie_jar_exists, load_credentials
 from amazon_orders_mcp.session_capture import capture_session
+from amazon_orders_mcp.print_fetch import fetch_print_page
+from amazon_orders_mcp.print_parser import parse_print_page
 from amazon_orders_mcp.serialize import (
     serialize_order,
     serialize_orders,
@@ -283,14 +285,8 @@ async def get_order_history(
 
 
 def _blocking_get_order(order_id: str) -> str:
-    from amazonorders.orders import AmazonOrders
-
-    session = build_session()
-    ensure_authenticated(session)
-    amazon_orders = AmazonOrders(session)
-
-    order = amazon_orders.get_order(order_id)
-    return _json(serialize_order(order))
+    text, html = fetch_print_page(order_id)
+    return _json(parse_print_page(text, html))
 
 
 @mcp.tool()

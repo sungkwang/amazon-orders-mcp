@@ -82,3 +82,35 @@ def parse_print_text(text: str) -> Dict[str, Any]:
         "totals": _totals(lines),
         "items": _items(lines),
     }
+
+
+LINK_RE = re.compile(
+    r"/dp/([A-Z0-9]{10})\?ref_=ppx_printOD_(?:title|image)_dt_b_fed_asin_title_(\d+)_0"
+)
+IMAGE_ANCHOR_RE = re.compile(r"ppx_printOD_image_dt_b_fed_asin_title_(\d+)_0")
+IMAGE_URL_RE = re.compile(r"media-amazon\.com/images/I/([^\"'\s?]+?)\._SS\d+_\.jpg")
+
+
+def item_links(html: str) -> Dict[int, Dict[str, str]]:
+    """Map item index (text order) to its product ASIN and image id.
+
+    The print page numbers each item in its product links
+    (`ppx_printOD_*_asin_title_<n>_0`), in the same order as the item text.
+    """
+    links: Dict[int, Dict[str, str]] = {}
+    for match in LINK_RE.finditer(html):
+        links.setdefault(int(match.group(2)), {})["asin"] = match.group(1)
+    for match in IMAGE_ANCHOR_RE.finditer(html):
+        image = IMAGE_URL_RE.search(html, match.end(), match.end() + 1500)
+        if image:
+            links.setdefault(int(match.group(1)), {})["image_id"] = image.group(1)
+    return links
+
+
+def parse_print_page(text: str, html: str) -> Dict[str, Any]:
+    """Combine the text summary with per-item ASINs and image ids."""
+    parsed = parse_print_text(text)
+    links = item_links(html)
+    for index, item in enumerate(parsed["items"]):
+        item.update(links.get(index, {}))
+    return parsed
