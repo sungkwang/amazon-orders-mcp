@@ -53,7 +53,7 @@ def _save_one(page: Any, order_id: str, output_dir: Path) -> Path:
     target = output_dir / invoice_filename(order_date, order_id)
     if target.exists():
         raise FileExistsError(f"Already saved, not overwritten: {target}")
-    page.pdf(path=str(target), format="Letter", print_background=True)
+    page.pdf(path=str(target), format="Letter", print_background=False)
     return target
 
 

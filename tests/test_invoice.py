@@ -51,6 +51,7 @@ class FakePage:
         return self._texts.get(self._current(), "")
 
     def pdf(self, path, **kwargs):
+        self.record["pdf_kwargs"] = kwargs
         self.record.setdefault("pdfs", []).append(path)
         Path(path).write_bytes(b"%PDF-fake")
 
@@ -99,6 +100,7 @@ def test_saves_pdf_with_standard_name(out_dir, jar):
     target = save_order_invoice_pdf(ORDER, out_dir, jar_path=jar, playwright_factory=_factory(page, record))
     assert target.name == f"2026-01-01_{ORDER}_Invoice.pdf"
     assert target.read_bytes().startswith(b"%PDF")
+    assert record["pdf_kwargs"]["print_background"] is False  # no page colors, footer band, or logo art
     assert record["closed"] is True
 
 
