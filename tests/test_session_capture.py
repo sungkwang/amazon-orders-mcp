@@ -134,3 +134,18 @@ def test_cookie_file_is_private_on_posix(tmp_path):
     )
 
     assert jar.stat().st_mode & 0o777 == 0o600
+
+
+def test_browser_cookies_adds_domain_path_and_secure(tmp_path):
+    from amazon_orders_mcp.session_capture import browser_cookies
+
+    jar = tmp_path / "cookies.json"
+    jar.write_text(json.dumps({"x-main": "abc", "session-id": "123"}))
+
+    cookies = browser_cookies(jar)
+
+    assert {c["name"] for c in cookies} == {"x-main", "session-id"}
+    for c in cookies:
+        assert c["domain"] == ".amazon.com"
+        assert c["path"] == "/"
+        assert c["secure"] is True

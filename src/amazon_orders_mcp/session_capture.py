@@ -97,3 +97,16 @@ def capture_session(
         cookie_count=len(flat),
         path=str(jar_path),
     )
+
+
+def browser_cookies(jar_path: Path = COOKIE_JAR_PATH) -> List[Dict[str, Any]]:
+    """Convert the saved flat cookie jar into cookies a browser context accepts.
+
+    The jar keeps only names and values, so the Amazon domain, path, and secure
+    flag are added back here.
+    """
+    flat = json.loads(jar_path.read_text())
+    return [
+        {"name": name, "value": value, "domain": ".amazon.com", "path": "/", "secure": True}
+        for name, value in flat.items()
+    ]
