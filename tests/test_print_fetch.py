@@ -10,7 +10,7 @@ from amazon_orders_mcp import server
 from amazon_orders_mcp.client import NonInteractiveAuthRequired
 from amazon_orders_mcp.print_fetch import fetch_print_page
 
-ORDER = "112-6616953-4948205"
+ORDER = "111-0000000-0000000"
 
 
 class FakePage:
@@ -116,7 +116,7 @@ def test_get_order_returns_parsed_summary(monkeypatch):
 
     out = json.loads(asyncio.run(server.get_order(ORDER)))
 
-    assert out["order_id"] == "112-6616953-4948205"
+    assert out["order_id"] == "111-0000000-0000000"
     assert out["totals"]["grand_total"] == 115.82
     assert len(out["items"]) == 4
 

@@ -15,7 +15,7 @@ def parsed():
 
 
 def test_order_header(parsed):
-    assert parsed["order_id"] == "112-6616953-4948205"
+    assert parsed["order_id"] == "111-0000000-0000000"
     assert parsed["order_date"] == "January 1, 2026"
 
 
