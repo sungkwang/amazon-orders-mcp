@@ -45,3 +45,7 @@ cookies.json
 .amazon-orders-mcp/
 node_modules/
 .agent/
+
+# Persistent Amazon browser profile (cookies)
+profile/
+profile.lock

@@ -85,34 +85,70 @@ def parse_print_text(text: str) -> Dict[str, Any]:
 
 
 LINK_RE = re.compile(
-    r"/dp/([A-Z0-9]{10})\?ref_=ppx_printOD_(?:title|image)_dt_b_fed_asin_title_(\d+)_0"
+    r"/dp/([A-Z0-9]{10})\?ref_=ppx_printOD_(?:title|image)_dt_b_fed_asin_title_(\d+)_(\d+)"
 )
-IMAGE_ANCHOR_RE = re.compile(r"ppx_printOD_image_dt_b_fed_asin_title_(\d+)_0")
+IMAGE_ANCHOR_RE = re.compile(r"ppx_printOD_image_dt_b_fed_asin_title_(\d+)_(\d+)")
 IMAGE_URL_RE = re.compile(r"media-amazon\.com/images/I/([^\"'\s?]+?)\._SS\d+_\.jpg")
 
 
-def item_links(html: str) -> Dict[int, Dict[str, str]]:
-    """Map item index (text order) to its product ASIN and image id.
+TITLE_ANCHOR_RE = re.compile(r"ppx_printOD_title_dt_b_fed_asin_title_(\d+)_(\d+)[^>]*>(.*?)</a>", re.S)
+TAG_RE = re.compile(r"<[^>]+>")
 
-    The print page numbers each item in its product links
-    (`ppx_printOD_*_asin_title_<n>_0`), in the same order as the item text.
+
+def _norm(text: str) -> str:
+    return re.sub(r"\s+", " ", TAG_RE.sub(" ", text or "")).strip().lower()
+
+
+def _slot(match: "re.Match[str]", first_group: int) -> int:
+    """One number per link: Amazon names links title_<a>_<b>, so both numbers pick the slot."""
+    return int(match.group(first_group)) * 1000 + int(match.group(first_group + 1))
+
+
+def item_links(html: str) -> Dict[int, Dict[str, str]]:
+    """Map the page's link number to its product ASIN, image id, and title text.
+
+    The link number does not always follow the item text order (for example when an
+    order ships in several packages), so parse_print_page matches by title when the
+    page gives the title text.
     """
     links: Dict[int, Dict[str, str]] = {}
     for match in LINK_RE.finditer(html):
-        links.setdefault(int(match.group(2)), {})["asin"] = match.group(1)
+        links.setdefault(_slot(match, 2), {})["asin"] = match.group(1)
     for match in IMAGE_ANCHOR_RE.finditer(html):
         image = IMAGE_URL_RE.search(html, match.end(), match.end() + 1500)
         if image:
-            links.setdefault(int(match.group(1)), {})["image_id"] = image.group(1)
+            links.setdefault(_slot(match, 1), {})["image_id"] = image.group(1)
+    for match in TITLE_ANCHOR_RE.finditer(html):
+        text = _norm(match.group(3))
+        if text:
+            links.setdefault(_slot(match, 1), {})["title"] = text
     return links
 
 
 def parse_print_page(text: str, html: str) -> Dict[str, Any]:
-    """Combine the text summary with per-item ASINs and image ids."""
+    """Combine the text summary with per-item ASINs and image ids.
+
+    Items are matched to links by title. An item that matches no link gets no ASIN and
+    no image, never someone else's. Without title text on the page, the link number is used.
+    """
     parsed = parse_print_text(text)
     links = item_links(html)
+    titled = {n: link for n, link in links.items() if link.get("title")}
+    used = set()
     for index, item in enumerate(parsed["items"]):
-        item.update(links.get(index, {}))
+        found = None
+        if titled:
+            key = _norm(item["title"])
+            for n, link in titled.items():
+                t = link["title"]
+                if n not in used and (t == key or t.startswith(key[:40]) or key.startswith(t[:40])):
+                    found = n
+                    break
+        elif index * 1000 in links:
+            found = index * 1000
+        if found is not None:
+            used.add(found)
+            item.update({k: v for k, v in links[found].items() if k != "title"})
     return parsed
 
 

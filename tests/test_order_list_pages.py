@@ -3,6 +3,7 @@
 Uses fake browser objects and synthetic text. No Amazon contact.
 """
 
+from tests.conftest import persistent
 import json
 from types import SimpleNamespace
 
@@ -50,7 +51,7 @@ def _factory(page):
     browser = _Browser()
 
     class _Playwright:
-        chromium = SimpleNamespace(launch=lambda **kwargs: browser)
+        chromium = SimpleNamespace(launch=lambda **kwargs: browser, launch_persistent_context=persistent(lambda: browser))
 
         def __enter__(self):
             return self

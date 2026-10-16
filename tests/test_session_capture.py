@@ -3,6 +3,7 @@
 No real browser is launched and nothing contacts Amazon.
 """
 
+from tests.conftest import persistent
 import json
 import sys
 from types import SimpleNamespace
@@ -21,6 +22,7 @@ class FakeBrowser:
         self._calls = 0
         self.closed = False
         self.page = SimpleNamespace(
+            url="https://www.amazon.com/gp/your-account/order-history",
             goto=lambda *a, **k: None,
             wait_for_load_state=lambda *a, **k: None,
         )
@@ -48,7 +50,7 @@ def fake_playwright_factory(browser):
 
     class _Playwright:
         def __init__(self):
-            self.chromium = SimpleNamespace(launch=lambda **kwargs: browser)
+            self.chromium = SimpleNamespace(launch=lambda **kwargs: browser, launch_persistent_context=persistent(lambda: browser))
 
         def __enter__(self):
             return self
@@ -165,3 +167,65 @@ def test_jar_is_replaced_without_leaving_a_temp_file(tmp_path):
 
     assert json.loads(jar.read_text()) == {"x-main": "new"}
     assert not (tmp_path / "cookies.json.tmp").exists()
+
+
+class FakeBox:
+    def __init__(self, present, checked=False):
+        self.present, self.checked, self.first = present, checked, self
+
+    def count(self):
+        return 1 if self.present else 0
+
+    def is_checked(self):
+        return self.checked
+
+    def check(self):
+        self.checked = True
+
+
+def _page(box, label_box=None):
+    return SimpleNamespace(
+        locator=lambda sel: box,
+        get_by_label=lambda text: label_box or FakeBox(False),
+        on=lambda *a, **k: None,
+    )
+
+
+def test_keep_signed_in_is_ticked_once_and_never_untouched_afterwards():
+    from amazon_orders_mcp.session_capture import _keep_signed_in_ticker
+
+    box = FakeBox(True)
+    tick = _keep_signed_in_ticker(_page(box))
+    tick()
+    assert box.checked is True
+    box.checked = False  # the user unticks it
+    tick()
+    assert box.checked is False
+
+
+def test_keep_signed_in_falls_back_to_the_label_and_tolerates_a_missing_box():
+    from amazon_orders_mcp.session_capture import _keep_signed_in_ticker
+
+    by_label = FakeBox(True)
+    _keep_signed_in_ticker(_page(FakeBox(False), by_label))()
+    assert by_label.checked is True
+
+    tick = _keep_signed_in_ticker(_page(FakeBox(False)))
+    tick()  # nothing found: no error
+    assert tick.state["done"] is False
+
+
+def test_old_cookie_is_not_enough_when_amazon_still_shows_the_sign_in_page(tmp_path):
+    browser = FakeBrowser([[_cookie("x-main", value="old")]])
+    browser.page.url = "https://www.amazon.com/ap/signin?openid.pape.max_auth_age=3600"
+    jar = tmp_path / "cookies.json"
+
+    result = capture_session(
+        timeout_seconds=4,
+        jar_path=jar,
+        playwright_factory=fake_playwright_factory(browser),
+        sleep=lambda s: None,
+    )
+
+    assert result["ok"] is False and "Timed out" in result["message"]
+    assert not jar.exists()

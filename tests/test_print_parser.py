@@ -61,8 +61,8 @@ def test_item_links_match_items_by_position():
     html = (Path(__file__).parent / "fixtures" / "print_item_links.txt").read_text(encoding="utf-8")
     links = item_links(html)
     assert links[0] == {"asin": "B0D8B5M9K1", "image_id": "71gCJU6br-L"}
-    assert links[2] == {"asin": "B01EAS3ER8", "image_id": "51egPDp3D1L"}
-    assert links[3]["asin"] == "B0CZGVZPKQ"
+    assert links[2000] == {"asin": "B01EAS3ER8", "image_id": "51egPDp3D1L"}
+    assert links[3000]["asin"] == "B0CZGVZPKQ"
 
 
 def test_parse_print_page_attaches_asin_to_each_item(parsed):
@@ -108,3 +108,39 @@ def test_validate_rejects_missing_total_and_date(parsed):
     with _pytest.raises(ParseStructureError) as info:
         validate_order_summary(parsed, url="u", text="t")
     assert "grand total" in str(info.value) and "order date" in str(info.value)
+
+
+def _link_block(n, asin, title, image):
+    return (
+        f'<a href="/dp/{asin}?ref_=ppx_printOD_image_dt_b_fed_asin_title_{n}"><img src="https://m.media-amazon.com/images/I/{image}._SS284_.jpg"></a>'
+        f'<a href="/dp/{asin}?ref_=ppx_printOD_title_dt_b_fed_asin_title_{n}">  {title}  </a>'
+    )
+
+
+def test_items_match_links_by_title_when_numbering_is_shifted():
+    from amazon_orders_mcp.print_parser import parse_print_page
+
+    text = FIXTURE.read_text(encoding="utf-8")
+    # Link numbers do not follow the text order, and one item has no link at all
+    html = _link_block("0_0", "CCCCCCCCCC", "Sample First Aid Tool - Sample Insect Relief, 3 Pack", "imgC") + _link_block(
+        "1_0", "AAAAAAAAAA", "Sample Plush Toy, 12 Inch Stuffed Animal, Sample Edition", "imgA"
+    )
+    result = parse_print_page(text, html)
+    by_seller = {i["seller"]: i for i in result["items"]}
+    assert by_seller["Sample Seller A"]["asin"] == "AAAAAAAAAA"
+    assert by_seller["Sample Seller A"]["image_id"] == "imgA"
+    assert by_seller["Sample Seller C"]["asin"] == "CCCCCCCCCC"
+    assert "asin" not in by_seller["Sample Seller B"]  # no link: no borrowed image or ASIN
+
+
+def test_two_items_in_one_package_each_get_their_own_link():
+    from amazon_orders_mcp.print_parser import parse_print_page
+
+    text = FIXTURE.read_text(encoding="utf-8")
+    # Both links end in a different second number (0_0 and 0_1), as Amazon writes them for one package
+    html = _link_block("0_0", "AAAAAAAAAA", "Sample Plush Toy, 12 Inch Stuffed Animal, Sample Edition", "imgA") + _link_block(
+        "0_1", "CCCCCCCCCC", "Sample First Aid Tool - Sample Insect Relief, 3 Pack", "imgC"
+    )
+    by_seller = {i["seller"]: i for i in parse_print_page(text, html)["items"]}
+    assert by_seller["Sample Seller A"]["image_id"] == "imgA"
+    assert by_seller["Sample Seller C"]["image_id"] == "imgC"

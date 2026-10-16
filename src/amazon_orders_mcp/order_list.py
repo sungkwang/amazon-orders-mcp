@@ -14,7 +14,7 @@ from playwright.sync_api import sync_playwright
 
 from amazon_orders_mcp.client import NonInteractiveAuthRequired
 from amazon_orders_mcp.secure_session import COOKIE_JAR_PATH
-from amazon_orders_mcp.session_capture import browser_cookies
+from amazon_orders_mcp.browser_profile import batch_context, describe_sign_in, needs_sign_in
 
 ORDER_NUMBER_RE = re.compile(r"ORDER #\s*(\d{3}-\d{7}-\d{7})", re.IGNORECASE)
 DATE_RE = re.compile(r"^([A-Z][a-z]+ \d{1,2}, \d{4})$")
@@ -99,18 +99,15 @@ def list_orders_for_year(
     started = time.monotonic()
     ended = False
     with playwright_factory() as p:
-        browser = p.chromium.launch(headless=True)
-        try:
-            context = browser.new_context()
-            context.add_cookies(browser_cookies(jar_path))
+        with batch_context(p, jar_path) as context:
             page = context.new_page()
             for page_index in range(MAX_PAGES):
                 start = page_index * PAGE_SIZE
                 url = PAGE_URL.format(year=year, start=start)
                 page.goto(url, wait_until="domcontentloaded", timeout=60000)
                 page.wait_for_timeout(1500)
-                if "/ap/signin" in page.url:
-                    raise NonInteractiveAuthRequired("Amazon redirected to sign-in; the saved session has expired.")
+                if needs_sign_in(page.url):
+                    raise NonInteractiveAuthRequired(f"Amazon is asking for sign-in or verification; sign in needed. ({describe_sign_in(page.url)})")
                 text = page.evaluate("() => document.body.innerText")
                 found = parse_order_list_text(text)
                 if not found and ORDER_MARKER_RE.search(text):
@@ -128,8 +125,6 @@ def list_orders_for_year(
                     orders.append(o)
                 if on_page:
                     on_page(page_index + 1, len(orders), time.monotonic() - started)
-        finally:
-            browser.close()
     truncated = not ended
     warning = (
         f"Stopped after {MAX_PAGES} pages; the list for {year} may be incomplete."

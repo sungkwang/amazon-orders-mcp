@@ -2,7 +2,7 @@
 
 The caller names the output folder. The tools never pick a location and never
 overwrite an existing file. The file name is
-<YYYY-MM-DD>_<order_id>_Invoice.pdf, built from the order date on the page.
+<YYYY-MM-DD>_order_amazon_<order_id>.pdf, built from the order date on the page.
 """
 
 from datetime import datetime
@@ -16,7 +16,7 @@ from amazon_orders_mcp.errors import ParseStructureError, snippet_of
 from amazon_orders_mcp.print_fetch import PRINT_URL, ORDER_ID_RE
 from amazon_orders_mcp.print_parser import parse_print_text
 from amazon_orders_mcp.secure_session import COOKIE_JAR_PATH
-from amazon_orders_mcp.session_capture import browser_cookies
+from amazon_orders_mcp.browser_profile import batch_context, describe_sign_in, needs_sign_in
 
 
 def invoice_filename(order_date: str, order_id: str) -> str:
@@ -27,7 +27,7 @@ def invoice_filename(order_date: str, order_id: str) -> str:
         day = datetime.strptime(order_date, "%B %d, %Y").date()
     except ValueError as e:
         raise ValueError(f"Not an order date: {order_date!r}") from e
-    return f"{day.isoformat()}_{order_id}_Invoice.pdf"
+    return f"{day.isoformat()}_order_amazon_{order_id}.pdf"
 
 
 def _check_inputs(order_ids: List[str], output_dir: Path) -> None:
@@ -43,8 +43,8 @@ def _save_one(page: Any, order_id: str, output_dir: Path) -> Path:
     url = PRINT_URL.format(order_id=order_id)
     page.goto(url, wait_until="domcontentloaded", timeout=60000)
     page.wait_for_timeout(2000)
-    if "/ap/signin" in page.url:
-        raise NonInteractiveAuthRequired("Amazon redirected to sign-in; the saved session has expired.")
+    if needs_sign_in(page.url):
+        raise NonInteractiveAuthRequired(f"Amazon is asking for sign-in or verification; sign in needed. ({describe_sign_in(page.url)})")
     text = page.evaluate("() => document.body.innerText")
     order_date = parse_print_text(text)["order_date"]
     if not order_date:
@@ -57,13 +57,6 @@ def _save_one(page: Any, order_id: str, output_dir: Path) -> Path:
     return target
 
 
-def _open_page(p: Any, jar_path: Path) -> Any:
-    browser = p.chromium.launch(headless=True)
-    context = browser.new_context()
-    context.add_cookies(browser_cookies(jar_path))
-    return browser, context.new_page()
-
-
 def save_order_invoice_pdf(
     order_id: str,
     output_dir: Path,
@@ -74,11 +67,8 @@ def save_order_invoice_pdf(
     output_dir = Path(output_dir)
     _check_inputs([order_id], output_dir)
     with playwright_factory() as p:
-        browser, page = _open_page(p, jar_path)
-        try:
-            return _save_one(page, order_id, output_dir)
-        finally:
-            browser.close()
+        with batch_context(p, jar_path) as context:
+            return _save_one(context.new_page(), order_id, output_dir)
 
 
 def save_order_invoices(
@@ -99,8 +89,8 @@ def save_order_invoices(
     _check_inputs(order_ids, output_dir)
     results: List[Dict[str, Any]] = []
     with playwright_factory() as p:
-        browser, page = _open_page(p, jar_path)
-        try:
+        with batch_context(p, jar_path) as context:
+            page = context.new_page()
             for order_id in order_ids:
                 try:
                     target = _save_one(page, order_id, output_dir)
@@ -111,6 +101,4 @@ def save_order_invoices(
                     raise
                 except Exception as e:  # keep going; report the order
                     results.append({"order_id": order_id, "status": "error", "path": "", "message": f"{type(e).__name__}: {e}"})
-        finally:
-            browser.close()
     return results

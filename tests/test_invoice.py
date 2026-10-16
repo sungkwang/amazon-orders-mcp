@@ -1,5 +1,6 @@
 """Invoice PDF naming, overwrite refusal, batch saving, and input checks. Fake browser; no Amazon contact."""
 
+from tests.conftest import persistent
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,8 +15,8 @@ OTHER = "111-0000000-0000002"
 
 
 def test_file_name_uses_iso_date_and_order_id():
-    assert invoice_filename("January 1, 2026", ORDER) == f"2026-01-01_{ORDER}_Invoice.pdf"
-    assert invoice_filename("October 14, 2026", ORDER) == f"2026-10-14_{ORDER}_Invoice.pdf"
+    assert invoice_filename("January 1, 2026", ORDER) == f"2026-01-01_order_amazon_{ORDER}.pdf"
+    assert invoice_filename("October 14, 2026", ORDER) == f"2026-10-14_order_amazon_{ORDER}.pdf"
 
 
 def test_bad_order_id_or_date_is_rejected():
@@ -69,7 +70,7 @@ def _factory(page, record):
             record["closed"] = True
 
     class _Playwright:
-        chromium = SimpleNamespace(launch=lambda **kwargs: _Browser())
+        chromium = SimpleNamespace(launch=lambda **kwargs: _Browser(), launch_persistent_context=persistent(lambda: _Browser()))
 
         def __enter__(self):
             return self
@@ -98,14 +99,14 @@ def test_saves_pdf_with_standard_name(out_dir, jar):
     record = {}
     page = FakePage({ORDER: _summary(ORDER)}, record=record)
     target = save_order_invoice_pdf(ORDER, out_dir, jar_path=jar, playwright_factory=_factory(page, record))
-    assert target.name == f"2026-01-01_{ORDER}_Invoice.pdf"
+    assert target.name == f"2026-01-01_order_amazon_{ORDER}.pdf"
     assert target.read_bytes().startswith(b"%PDF")
     assert record["pdf_kwargs"]["print_background"] is False  # no page colors, footer band, or logo art
     assert record["closed"] is True
 
 
 def test_existing_file_is_never_overwritten(out_dir, jar):
-    existing = out_dir / f"2026-01-01_{ORDER}_Invoice.pdf"
+    existing = out_dir / f"2026-01-01_order_amazon_{ORDER}.pdf"
     existing.write_bytes(b"keep me")
     record = {}
     page = FakePage({ORDER: _summary(ORDER)}, record=record)
@@ -124,7 +125,7 @@ def test_missing_output_folder_is_refused_before_browsing(tmp_path, jar):
 
 
 def test_batch_saves_skips_and_reports_errors(out_dir, jar):
-    existing = out_dir / f"2026-01-01_{OTHER}_Invoice.pdf"
+    existing = out_dir / f"2026-01-01_order_amazon_{OTHER}.pdf"
     existing.write_bytes(b"keep me")
     third = "111-0000000-0000003"
     record = {}
@@ -138,7 +139,7 @@ def test_batch_saves_skips_and_reports_errors(out_dir, jar):
 
     by_id = {r["order_id"]: r for r in results}
     assert by_id[ORDER]["status"] == "saved"
-    assert Path(by_id[ORDER]["path"]).name == f"2026-01-01_{ORDER}_Invoice.pdf"
+    assert Path(by_id[ORDER]["path"]).name == f"2026-01-01_order_amazon_{ORDER}.pdf"
     assert by_id[OTHER]["status"] == "skipped"
     assert by_id[third]["status"] == "error"
     assert existing.read_bytes() == b"keep me"

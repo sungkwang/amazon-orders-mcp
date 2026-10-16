@@ -48,6 +48,7 @@ def test_progress_callback_reports_each_page(tmp_path):
     from types import SimpleNamespace
 
     from amazon_orders_mcp.order_list import list_orders_for_year
+    from tests.conftest import persistent
 
     sample = FIXTURE.read_text(encoding="utf-8")
     texts = [sample, ""]  # page 1 has orders, page 2 is empty and ends the loop
@@ -94,7 +95,7 @@ def test_progress_callback_reports_each_page(tmp_path):
     jar.write_text('{"x-main": "abc"}')
 
     class _Playwright:
-        chromium = SimpleNamespace(launch=lambda **kwargs: browser)
+        chromium = SimpleNamespace(launch=lambda **kwargs: browser, launch_persistent_context=persistent(lambda: browser))
 
         def __enter__(self):
             return self

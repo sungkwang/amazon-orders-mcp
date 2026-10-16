@@ -3,7 +3,7 @@
 Save Amazon order summaries as PDFs, one per order, in one browser session.
 
 Reads order numbers from a text file (one per line; blank lines and # comments
-are ignored) and writes <YYYY-MM-DD>_<order>_Invoice.pdf into the output folder.
+are ignored) and writes <YYYY-MM-DD>_order_amazon_<order>.pdf into the output folder.
 Orders that already have a file there are skipped. Each run contacts Amazon, so
 run it only when you choose to.
 
